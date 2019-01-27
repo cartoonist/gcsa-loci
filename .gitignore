@@ -1,3 +1,20 @@
+# Binary directory
+bin/
+
+# Generated Makefiles
+src/.d/
+
+# Installed header-only libraries
+src/spdlog
+src/kseq++
+
+# Log files
+*.log
+
+# Performance reports
+**/callgrind.out.*
+**/perf.data
+
 # ctags
 tags
 
