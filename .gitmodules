@@ -1,3 +1,6 @@
 [submodule "ext/spdlog"]
 	path = ext/spdlog
 	url = https://github.com/gabime/spdlog.git
+[submodule "ext/kseq++"]
+	path = ext/kseq++
+	url = https://github.com/cartoonist/kseqpp.git
