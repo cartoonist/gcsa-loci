@@ -23,6 +23,7 @@
 #include <string>
 
 #include <seqan/arg_parse.h>
+#include <sdsl/bit_vectors.hpp>
 #include <gcsa/gcsa.h>
 #include "grem/vargraph.h"
 #include "grem/utils.h"
@@ -90,6 +91,8 @@ signal_handler( int )
 query_loci( std::string& vg_name, std::string& gcsa_name, unsigned int seed_len,
     std::string& /* output_name */ )
 {
+  typedef std::make_unsigned< grem::VarGraph::offset_type >::type uoffset_type;
+
   //std::ofstream output_file( output_name, std::ofstream::out );
   std::ifstream vg_file( vg_name, std::ifstream::in | std::ifstream::binary );
   if ( !vg_file ) {
@@ -122,48 +125,51 @@ query_loci( std::string& vg_name, std::string& gcsa_name, unsigned int seed_len,
     auto timer = Timer<>( "query" );
     seqan::Iterator< grem::VarGraph, grem::Backtracker >::Type bt_itr( vargraph );
     grem::Path< grem::VarGraph > trav_path( &vargraph );
-    grem::Path< grem::VarGraph > current_path( &vargraph );
-
+    sdsl::bit_vector bv( vargraph.get_max_node_len(), 0 );
     for ( grem::VarGraph::rank_type rank = 1; rank <= vargraph.max_node_rank(); ++rank ) {
       grem::VarGraph::nodeid_type id = vargraph.rank_to_id( rank );
-      auto label_len = vargraph.node_length( id );
+      auto label = vargraph.node_sequence( id );
+      uoffset_type offset = ( label.size() < seed_len ) ? 0 : label.size() - seed_len + 1;
 
+      gcsa::range_type range;
+      // Query all k-mers inside the node.
+      auto end = label.begin() + offset;
+      for ( auto it = label.begin(); it != end; ++it ) {
+        range = index.find( it, it + seed_len );
+        // :TODO:Wed Aug 07 11:09:\@cartoonist:
+        // Getting non-empty range doesn't necessarily mean that the locus is covered.
+        // The locations corresponding to the range should also be verified.
+        if ( gcsa::Range::empty( range ) ) ++uncovered_loci;
+      }
+      // Query all k-mers spanning between this node and other ones.
       go_begin( bt_itr, id );
-      while ( !at_end( bt_itr ) ) {
-        std::make_unsigned< grem::VarGraph::offset_type >::type offset = label_len;
-        extend_to_k( trav_path, bt_itr, offset - 1 + seed_len );
-        if ( trav_path.get_sequence_len() >= seed_len ) current_path = trav_path;
-        while ( current_path.get_sequence_len() != 0) {
-          auto trimmed_len = current_path.get_sequence_len()
-            - vargraph.node_length( current_path.get_nodes().back() );
-          if ( trimmed_len <= seed_len - 1 ) {
-            offset = 0;
-            break;
+      while ( !at_end( bt_itr ) && offset != label.size() ) {
+        extend_to_k( trav_path, bt_itr, label.size() - 1 + seed_len );
+        if ( trav_path.get_sequence_len() >= seed_len ) {
+          auto trav_seq = sequence( trav_path );
+          auto it = trav_seq.begin() + offset;
+          end = trav_seq.begin() + label.size();
+          if ( end > trav_seq.end() - seed_len + 1 ) end = trav_seq.end() - seed_len + 1;
+          for ( std::size_t i = offset; it != end; ++it, ++i ) {
+            if ( bv[ i ] == 1 ) continue;
+            range = index.find( it, it + seed_len );
+            // :TODO:Wed Aug 07 11:09:\@cartoonist:
+            // Getting non-empty range doesn't necessarily mean that the locus is covered.
+            // The locations corresponding to the range should also be verified.
+            if ( gcsa::Range::empty( range ) ) bv[ i ] = 1;
           }
-          offset = trimmed_len - seed_len + 1;
-          trim_back( current_path );
+          while ( offset < label.size() && bv[ offset ] == 1 ) ++offset;
         }
-        auto trav_seq = sequence( trav_path );
-        auto it = trav_seq.begin() + offset;
-        gcsa::range_type range;
-        for ( auto f = offset;
-            f < label_len && f + seed_len < trav_seq.length() + 1;
-            ++f ) {
-          range = index.find( it, it + seed_len );
-          if ( gcsa::Range::empty( range ) ) break;
-          ++it;
-        }
-        if ( gcsa::Range::empty( range ) ) {
-          ++uncovered_loci;
-          break;
-        }
-
         --bt_itr;
         trim_back( trav_path, *bt_itr );
-        grem::clear( current_path );
       }
-      done_idx += label_len;
-
+      for ( std::size_t i = 0; i < bv.size(); ++i ) {
+        if ( bv[ i ] == 1 ) {
+          ++uncovered_loci;
+          bv[ i ] = 0;
+        }
+      }
+      done_idx += label.size();
       grem::clear( trav_path );
     }
   }
